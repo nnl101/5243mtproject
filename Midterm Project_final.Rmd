@@ -1,0 +1,674 @@
+---
+title: "Applied Data Science:  Midterm Project"
+author: " "
+date: ""
+output:
+  prettydoc::html_pretty:
+  theme: cayman
+highlight: github
+---
+```{r setup, include=FALSE}
+set.seed(72)
+knitr::opts_chunk$set(echo = TRUE, comment="", warning = FALSE, message = FALSE, tidy.opts=list(width.cutoff=55))
+```
+
+```{r libraries, echo = FALSE}
+library(data.table)
+library(DT)
+library(class)
+library(rpart)
+library(e1071)
+library(randomForest)
+library(nnet)
+library(glmnet)
+library(ggplot2)
+```
+
+## Introduction
+In this project, we are going to use MNIST-fashion dataset building machine learning model to classify images. The MNIST-fashion train dataset has 60000 rows and test dataset has 10000 rows. The first step is to sample the dataset into 9 subsets. In order to choosing the reasonable size, we explored the relationship between the size of data and running time. Then we decided to use 3 different sample size 5000, 10000 and 20000 which has reasonable runnning time. For getting balanced data, we also sampled N/10 rows data for each label and then combined them together for getting N rows dataset. After that, we got our 9 perfectly balanced train datasets.
+
+The second step is to train the model, we used Logistic regression, Lasso, Ridge, Decision Tree, Random Forest, SVM, Naive Bayes, Nerual Network, KNN and ensemble learning (bagging) to train the model and use the model to predict the test dataset. During the process, we also try to find the optimal parameters with gridsearch for example penalty parameter $\lambda$ in Lasso and Ridge.
+
+The third step is to evaluate the model, we calculated the running time, the size of the dataset and accuracy for each trained model, and calculated the mean of the models' results in the dataset with the same size.Finally, we summrized all the results and discussed the change of points if the weights in scoring function change.  
+
+### Sampling method
+For getting the good results, we want to train the model on the balanced dataset (each label in the dataset has the same proportion). So we defined our sampling method as following, the function for sampling data is `sampling`.   
+Step1: Define the sampling size V  
+Step2: Sampling V/10 rows of data from the dataset with the same label  
+Step3: Repete step2 10 times
+Step4: Union all the sampling subsets together and get our training set  
+
+### The relationship between sample size and running time
+```{r , echo = FALSE}
+K_Nearest_Neighbors <- function(data){
+  # sample = sample.int(n = nrow(data), size = floor(0.8*nrow(data)), replace = F)
+  # train = data[sample, ]
+  # test  = data[-sample, ]
+  pred <- knn(data[, 2:50], test = test[,2:50], cl=data$label, k=5)
+  accuracy = sum(test$label==pred)/nrow(test)
+  return(list("Model"=NA, "accuracy"=accuracy, "pred" = pred))
+}
+
+Log_Reg <- function(data){
+  # sample = sample.int(n = nrow(data), size = floor(0.8*nrow(data)), replace = F)
+  # train = data[sample,]
+  # test  = data[-sample,]
+  k <- multinom(label~.,data=data, trace = FALSE)
+  predicted.classes <- k %>% predict(test)
+  accuracy = mean(predicted.classes == test$label)
+  lendata = nrow(data)
+  return(list("model"=k, "accuracy"=accuracy, "pred" = predicted.classes))}
+
+Naive_Bayes <- function(data){
+  # sample = sample.int(n = nrow(data), size = floor(0.8*nrow(data)), replace = F)
+  # train = data[sample, ]
+  # test  = data[-sample, ]
+  nb <- naiveBayes(as.factor(data$label)~., data=data)
+  pred <- predict(nb, test[,2:50])
+  accuracy = sum(test$label==pred)/nrow(test)
+  return(list("Model"=nb, "accuracy"=accuracy, "pred" = pred))
+}
+```
+
+The following functions are scoring function for getting scores for each model and sampling function for getting our 9 perfectly balanced datasets.
+```{r functions}
+scoring <- function(data, model){
+  # parameters: original datasets, model function vector
+  # outputs: 10 models' size of data, running time, accuracy, points
+  model = match.fun(model)
+  # timing
+  start_time <- as.numeric(Sys.time())
+  result <- model(data)
+  end_time <- as.numeric(Sys.time())
+  # score
+  A = nrow(data)/60000
+  B = min(1, (end_time - start_time)/60)
+  C = 1 - result$"accuracy"
+  return(data.table("Sample size" = nrow(data),
+                    Data = deparse(substitute(data)),
+                    A = round(A,4),
+                    B = round(B,4),
+                    C = round(C,4),
+                    score = round((0.25*A + 0.25*B + 0.5*C),4)))
+}
+sampling <- function(data=train,size){
+  # parameters: original dataset, size of the data to sample
+  # output: the specific dataset
+  num_unique_label <- length(unique(train$label))
+  result <- c()
+  for (i in 1:num_unique_label){
+    # sampling with balanced labels
+    sub_data <- data[data$label==unique(train$label)[i],]
+    sample_data <- sub_data[sample(nrow(sub_data), size/num_unique_label, replace = FALSE),]
+    result <- rbind(result,sample_data)
+  }
+  return(result)
+}
+```
+
+```{r constants}
+n.values <- c(5000, 10000, 20000)
+iterations <- 3
+```
+
+```{r load_data}
+train <- fread("MNIST-fashion training set-49.csv")
+test <- fread("MNIST-fashion testing set-49.csv")
+```
+
+```{r}
+
+runtime <- function(model){
+  ss <- data.frame("size" = c(100, 500, 1000, 2000, 5000, 10000, 20000, 25000))
+  model = match.fun(model)
+  table <- data.frame(matrix(NA, nrow = length(ss$size), ncol = 2))
+  names(table) <- c("size", "time")
+  for (i in 1:length(ss$size)){
+    data <- sampling(train,ss$size[i])
+    start_time <- as.numeric(Sys.time())
+    result <- model(data)
+    end_time <- as.numeric(Sys.time())
+    table$time[i] <- as.numeric(x = end_time - start_time, units = "secs")
+    table$size[i] <- nrow(data)
+  }
+  ggplot(table,aes(size,time)) + geom_point(size=3, color = "blue") + ggtitle("Sample Size vs. Running Time") + xlab("Sample Size") + ylab("Running Time (in seconds)")
+}
+
+runtime(K_Nearest_Neighbors)
+runtime(Log_Reg)
+# runtime(Naive_Bayes)
+```
+
+Based on our analysis, some models' training time are increasing exponentially like KNN and some are increasing linearly like Logistic regression. The reason behind it may attribute to the KNN algorithm. If we are using more data, we need to estimate more distance values for each data point. But Logistic regression doesn't have this problem. So, for saving computation cost, we are going to use three types of sample size 5000, 10000, 20000. The running time for the most of cases should be less than 1 minute based on our estimation. If we don't care about the runnin time, we can use more data and get better score.
+
+```{r source_files, echo = FALSE}
+
+```
+
+### Data cleaning and exploration
+```{r clean_data}
+summary(train)
+# check NA value for train and test set
+cat("The number of NA value ", sum(is.na(train)))
+cat("The number of NA value ", sum(is.na(test)))
+```
+
+```{r generate_samples}
+# sample size = 5000
+dat_5000_1 <- sampling(train,5000)
+dat_5000_2 <- sampling(train,5000)
+dat_5000_3 <- sampling(train,5000)
+# sample size = 10000
+dat_10000_1 <- sampling(train,10000)
+dat_10000_2 <- sampling(train,10000)
+dat_10000_3 <- sampling(train,10000)
+# sample size = 20000
+dat_20000_1 <- sampling(train,20000)
+dat_20000_2 <- sampling(train,20000)
+dat_20000_3 <- sampling(train,20000)
+```
+
+### Model 1:  
+KNN model is the first model we want to try since it's very easy to understand, the whole process for this algorithm shows as below:
+Step1: calculate the distance between each data point and all data points  
+Step2: rank the distance in increasing order  
+Step3: choose the top K points and calculate the probability of each class in those K points  
+Step4: return the class with max probability  
+
+The reasons for why we are using KNN is that the algorithm is very easy to understand. For the disadvantage of this model:
+1. cannot use the model when features are not ordinal  
+2. the computation cost is big when the dataset is large since we need to calculate the distance between each point and the whole dataset, we also prove this when we explored the relationship between sample size and running time.
+3. very sensitive to outliers  
+4. easy to run into local optimum  
+
+KNN has one important parameter: the number of neighbors. After trying different value (from 3 to 10), we find the optimal value 5. Based on the result table, we could see the accuracy on the test set is good. The runnning time is long when the size of dataset is big which also prove the second disadvantage of KNN model. Overall, it's better to use 5000 lines of data if we want to save computation cost since the difference of accuracy is not very big. 
+
+```{r code_model1_development, eval = TRUE}
+# Show the code that we use to fit the model to the training data
+# generate predictions on the testing set
+# and evaluate the accuracy of the results
+K_Nearest_Neighbors <- function(data){
+  # sample = sample.int(n = nrow(data), size = floor(0.8*nrow(data)), replace = F)
+  # train = data[sample, ]
+  # test  = data[-sample, ]
+  pred <- knn(data[, 2:50], test = test[,2:50], cl=data$label, k=5)
+  accuracy = sum(test$label==pred)/nrow(test)
+   return(list("Model"=NA, "accuracy"=accuracy, "pred" = pred))
+}
+```
+
+```{r load_model1}
+Model_1 <- rbind(scoring(dat_5000_1,K_Nearest_Neighbors),
+                 scoring(dat_5000_2,K_Nearest_Neighbors),
+                 scoring(dat_5000_3,K_Nearest_Neighbors),
+                 scoring(dat_10000_1,K_Nearest_Neighbors),
+                 scoring(dat_10000_2,K_Nearest_Neighbors),
+                 scoring(dat_10000_3,K_Nearest_Neighbors),
+                 scoring(dat_20000_1,K_Nearest_Neighbors),
+                 scoring(dat_20000_2,K_Nearest_Neighbors),
+                 scoring(dat_20000_3,K_Nearest_Neighbors))
+datatable(Model_1)
+```
+### Model 2:  
+Decision Tree is a tree based model based on greedy algorithm with entropy as an evaluation matrix. Let's introduce `Entropy` first. `Entropy` measures the intensity of information, suppose the probability for event A happen is 100%, which means event A happen don't have too much information since it is certain. However, if the probability for event B happen is 1%, this information is more valuable. Based on this idea, the formula for `Entropy` is:
+$$H(X) = -\sum_{i=1}^np_ilogp_i$$
+which have negative relationship with probability. $X$ is a random variable with n possible situations and $p$ is the probability of event happens.
+Since we wish each leaf node in decision tree has minimium $H(X_i)$ and also want to construct the tree model quickly, we need to find the best feature to split the dataset and decrease the `Entropy`. So we use information gain to measure the change of information intensity:
+$$info_A(D) = \sum_{j=1}^n \frac{|D_j|}{|D|}info(D_j)$$
+$$gain(A) = info(D) - info_A(D)$$
+Based on the above formula, we can decide which feature we are going to use for spliting the tree node and build the whole tree model. Based on different evaluation matrix, the algorithm names are also different (ID3, C4.5 and Cart).   
+The reasons for why we are using Decision Tree are:
+1. The algorithm is easy to understand and interpret with visualization
+2. The algorithm can accept both numeric and categorical data
+
+For the disadvantage of this model:
+1. Easy to have overfitting problem if choose bad parameters
+2. The model is unstable. Slightly changing the dataset or parameters will cause the tree structure change significantly
+3. Decision Tree has lots of parameters
+
+For the important parameters:  
+1. The maximum depth of the tree
+2. The minimum number of samples required to split an internal node
+
+We are trying to adjust those two important parameters for avoiding overfitting, but the performance (accuracy) is not good. Also, the accuracy is not increase as the size of training data increasing. So we believe single decision tree is not a good model for this problem.
+
+```{r code_model2_development, eval = TRUE}
+Classification_Tree <- function(data){
+  # sample = sample.int(n = nrow(data), size = floor(0.8*nrow(data)), replace = F)
+  # train = data[sample, ]
+  # test = data[-sample, ]
+  testlabel <- rpart(formula = test$label~., data = test, method = "class", minsplit=15, maxdepth= 10)
+  model <- rpart(formula = data$label~., data = data, method = "class", minsplit=15, maxdepth= 10)
+  pred <- predict(object = model, newdata = test[,2:50], type = "vector")
+  pred2 <- predict(object = model, newdata = test[,2:50], type = "class")
+  accuracy = sum(testlabel$y==pred)/nrow(test)
+  return(list("Model"=model, "accuracy"=accuracy, "pred" = pred2))
+}
+```
+
+```{r load_model2}
+Model_2 <- rbind(scoring(dat_5000_1,Classification_Tree),
+                 scoring(dat_5000_2,Classification_Tree),
+                 scoring(dat_5000_3,Classification_Tree),
+                 scoring(dat_10000_1,Classification_Tree),
+                 scoring(dat_10000_2,Classification_Tree),
+                 scoring(dat_10000_3,Classification_Tree),
+                 scoring(dat_20000_1,Classification_Tree),
+                 scoring(dat_20000_2,Classification_Tree),
+                 scoring(dat_20000_3,Classification_Tree))
+datatable(Model_2)
+```
+
+### Model 3:  
+SVM is one of the most important machine learning algorithm. We are not going to explain this model in detail since the complexity. The goal of this algorithm is to find the optimal hyperplane to splite the whole dataset. The definition of the hyperplane is:
+ $$y = w^T\Phi(x)+b$$
+And we also need a decision function for generating class value:
+$$f(x) = sign(w^T\Phi(x)+b)$$
+The reasons for why we are using SVM are:
+1. the model has good accuracy especially for small dataset
+2. the model has good generalization ability
+3. we can customize the kernel function  
+
+For the disadvantage of this model:
+1. the model has lots of parameters  
+2. the outputs are not probability
+3. the model is complex and hard to explain
+
+For this problem, we only explore the kernel type to be used in the algorithm, there are four popular kernal types: linear, polynomial, radial basis, sigmoid. After trying all those kernel, we decide to use radial kernel which has the best result. Based on the result, the accuracy is high. However, the running time is very long due to the model complexity. If we want the model have high accuracy, SVM is a good choice.
+
+```{r code_model3_development, eval = TRUE}
+Support_Vector_Machines <- function(data){
+  # sample = sample.int(n = nrow(data), size = floor(0.8*nrow(data)), replace = F)
+  # train = data[sample, ]
+  # test = data[-sample, ]
+  labels <- as.factor(data$label)
+  svm <- svm(data[,2:50],labels)
+  pred <- predict(svm, test[,2:50])
+  accuracy = sum(test$label==pred)/nrow(test)
+  return(list("Model"=svm, "accuracy"=accuracy, "pred" = pred))
+}
+```
+
+```{r load_model3}
+Model_3 <- rbind(scoring(dat_5000_1, Support_Vector_Machines),
+                 scoring(dat_5000_2, Support_Vector_Machines),
+                 scoring(dat_5000_3, Support_Vector_Machines),
+                 scoring(dat_10000_1, Support_Vector_Machines),
+                 scoring(dat_10000_2, Support_Vector_Machines),
+                 scoring(dat_10000_3, Support_Vector_Machines),
+                 scoring(dat_20000_1, Support_Vector_Machines),
+                 scoring(dat_20000_2, Support_Vector_Machines),
+                 scoring(dat_20000_3, Support_Vector_Machines))
+datatable(Model_3)
+```
+
+### Model 4
+RandomForest is an ensemble model of decision tree, using bootstrap method to sample the data first, then using bagging method to combine all the results. 
+The reasons for why we are using Random Forest are:
+1. The algorithm is easy to understand
+2. The algorithm can accept both numeric and categorical data
+3. Random Forest has very good performance after bagging 
+
+For the disadvantage of this model:
+1. Easy to have overfitting problem if not tune the parameters
+3. The model has lots of parameters
+4. Running time will be long if the number of base models is large
+
+For this problem, we explored the parameter: the number of trees. We found that this parameter has default value 500, but if we change this parameter to 50, the accuracy is not change too much. For getting the best score, we are going to use 120 trees to generate forest. According to the result, this model's performance is very good. The training time is short and accuracy is high. Compared to Decision Tree, we can see how ensemble learning help improve the score.
+
+```{r code_model4_development, eval = TRUE}
+my_randomForest <- function(data){
+  # train and test data
+  # sample = sample.int(n = nrow(data), size = floor(0.8*nrow(data)), replace = F)
+  # train = data[sample, ] #just the samples
+  # test  = data[-sample, ] #everything but the samples
+  # build model
+  rf_model = randomForest(formula = as.factor(data$label)~., data = data, ntree = 120)
+  ypred = predict(object = rf_model, newdata = test[, 2:50])
+  # data size
+  lendata = nrow(data)
+  # accuracy
+  accuracy = sum(test$label == ypred)/nrow(test)
+  return(list("model"=rf_model, "accuracy"=accuracy, "pred"=ypred))
+}
+```
+
+```{r load_model4}
+Model_4 <- rbind(scoring(dat_5000_1,my_randomForest),
+                 scoring(dat_5000_2,my_randomForest),
+                 scoring(dat_5000_3,my_randomForest),
+                 scoring(dat_10000_1,my_randomForest),
+                 scoring(dat_10000_2,my_randomForest),
+                 scoring(dat_10000_3,my_randomForest),
+                 scoring(dat_20000_1,my_randomForest),
+                 scoring(dat_20000_2,my_randomForest),
+                 scoring(dat_20000_3,my_randomForest))
+datatable(Model_4)
+```
+
+### Model 5
+Neural network is a very popular method. The general calculation process of neural network is:  
+Step1: calculate $\sum_i^n w_ix_i$  
+Step2: input the result to activate function get $\Theta(\sum_i^n w_ix_i)$  
+Step3: Calculate the loss and optimize the parameters with backpropagation  
+
+The reasons for why we are using Neural Network are:
+1. Neural network has good performance for nonlinear problem  
+2. there are lots of very successful cases of image classification with neural network
+
+For the disadvantage of this model:
+1. the model has lots of parameters  
+2. the structure of the model is complex and hard to define  
+3. training time is long  
+4. easy to overfitting  
+5. the model has gradient disappear problem
+
+In this case, we explored the number of neurons in hidden layer, range for initializing weights and maximum iteration times. After exploring the parameters, we find the the number of iteration has no effect on accuracy when it above 1000. Expand the range of weights also help improve the accuracy. However, based on the result, the neural network is not a good model right now since it has low accuracy and long running time. But this model is simple single layer NN. If we have more computation resources, we could try to build multiple layers neural network and try to get better score.
+
+```{r code_model5_development, eval = TRUE}
+my_NN <- function(data){
+  # train and test data
+  # sample = sample.int(n = nrow(data), size = floor(0.8*nrow(data)), replace = F)
+  # train = data[sample, ] #just the samples
+  # test  = data[-sample, ] #everything but the samples
+  # build model
+  nn_model = nnet(formula = as.factor(data$label)~., data = data,
+                  size = 10, rang = 1, maxit = 1000, trace = F, decay = 0.1)
+  ypred = predict(object = nn_model, newdata = test[, 2:50], type = "class")
+  # data size
+  lendata = nrow(data)
+  # accuracy
+  accuracy = sum(test$label == ypred)/nrow(test)
+  return(list("model"=nn_model, "accuracy"=accuracy, "pred" = ypred))
+}
+```
+
+```{r load_model5}
+Model_5 <- rbind(scoring(dat_5000_1,my_NN),
+                 scoring(dat_5000_2,my_NN),
+                 scoring(dat_5000_3,my_NN),
+                 scoring(dat_10000_1,my_NN),
+                 scoring(dat_10000_2,my_NN),
+                 scoring(dat_10000_3,my_NN),
+                 scoring(dat_20000_1,my_NN),
+                 scoring(dat_20000_2,my_NN),
+                 scoring(dat_20000_3,my_NN))
+datatable(Model_5)
+```
+
+### Model 6
+Logistic regression is one of the most popular algorithm to solve a classification problem. The concept of logistic regression is to calculate the probability of $y=class_i$ given x and $\theta$. We know the formula for linear regression is simply  
+$$y = \sum_i^na_ix_i + b$$
+For getting the probability, we will use the sigmoid function to map y into probability score. So, the function for logistic regression is:
+$$y = \frac{1}{1+e^{\sum_i^na_ix_i + b}}$$
+Basically, we want to get the right probability $P(y = 1|x;\theta)$, so we need to find the optimal $\theta$  
+Let's define the object function first and take binary classification problem as an example.  
+$$P(y^{(i)}=1|x^{(i)};\theta) = h_{\theta}(x) = p$$  
+$$P(y^{(i)}=0|x^{(i)};\theta) = 1- h_{\theta}(x) = 1 - p$$
+$$P(y^{(i)}|x^{(i)}; \theta) = (h_{\theta}(x^{(i)}))^{y^{(i)}} (1- h_{\theta}(x^{(i)}))^{1-y^{(i)}}$$
+The objective function is:
+$$L(\theta) = \prod_{i=1}^m P(y^{(i)}|x^{(i)}; \theta)$$
+Our goal is to maximize the objective function, we can use maximum likelihood to solve it.
+
+The reasons for why we are using Logistic regression are:
+1. The algorithm is easy to understand and interpret
+2. Don't have high computation cost
+3. Have good performance on dataset with outliers
+4. The output is probability, so we can rank the result
+
+For the disadvantage of this model:
+1. The model have good performance if the dataset don't have too much types of labels, but the dataset we are working on have 10 types of labels
+2. The model is a weak classifer and don't have high accuracy
+
+For this model, we use default parameter. Based on the result, the accuracy is good, but the accuracy is not changed too much as the size of data increasing. The running time is OK. All in all, this model's performance is not bad.
+
+```{r code_model6_development, eval = TRUE}
+Log_Reg <- function(data){
+  # sample = sample.int(n = nrow(data), size = floor(0.8*nrow(data)), replace = F)
+  # train = data[sample,]
+  # test  = data[-sample,]
+  k <- multinom(label~.,data=data, trace = FALSE)
+  predicted.classes <- k %>% predict(test)
+  accuracy = mean(predicted.classes == test$label)
+  lendata = nrow(data)
+  return(list("model"=k, "accuracy"=accuracy, "pred" = predicted.classes))
+}
+
+```
+
+```{r load_model6}
+Model_6 <- rbind(scoring(dat_5000_1,Log_Reg),
+                 scoring(dat_5000_2,Log_Reg),
+                 scoring(dat_5000_3,Log_Reg),
+                 scoring(dat_10000_1,Log_Reg),
+                 scoring(dat_10000_2,Log_Reg),
+                 scoring(dat_10000_3,Log_Reg),
+                 scoring(dat_20000_1,Log_Reg),
+                 scoring(dat_20000_2,Log_Reg),
+                 scoring(dat_20000_3,Log_Reg))
+datatable(Model_6)
+```
+
+### Model 7
+Lasso model is also one of the generalized linear model, we will explain it from probability angle.  
+For the linear regression model:  
+$$y = \theta^TX^{(i)} + \epsilon^{(i)}$$
+Assume $\epsilon^{(i)}$ iid and follow the normal distribution with mean 0 and variance $\sigma^2$  
+So we can get:
+$$p(\epsilon^{(i)}) = \frac{1}{\sqrt{2\pi\sigma}}exp(\frac{(\epsilon^{(i)})^2}{2\sigma^2})$$
+$$p(\epsilon^{(i)}) = \frac{1}{\sqrt{2\pi\sigma}}exp(\frac{(y - \theta^TX^{(i)})^2}{2\sigma^2})$$
+We are going to use maximum likelihood function to get optimal $\theta$
+
+$$L(\theta) = \prod_{i=1}^m p(y^{(i)}|x^{(i)}; \theta)$$
+$$l(\theta) = log(L(\theta)) = mlog\frac{1}{\sqrt{2\pi\sigma}} - \frac{1}{2\sigma^2}\sum_{i=1}^m(y^(i) - \theta^TX^{(i)})^2$$
+Based on the formula above, we can write down the loss function:
+$$\nabla_\theta J(\theta) = \nabla_\theta(\frac{1}{2}(X\theta - y)^T(X\theta - y))$$
+For Lasso regression, we will L1 penalty for avoiding overfitting  
+$$\lambda \sum_{j=1}^n |\theta_j|$$
+The reasons for why we are using Lasso regression are:
+1. The algorithm is easy to understand and interpret
+2. More efficient and faster
+3. Help do feature selection since some of features' coefficients will turn into 0
+
+For the disadvantage of this model:
+1. The model is a weak classifer and don't have high accuracy
+
+For the important parameters $\lambda$: the penalty coefficient. We also used gridsearch to find the optimal value. The result of Lasso is also almost the same as Logistic regression. We can treat them as base models and ensemble them later.
+
+```{r code_model8_development, eval = TRUE}
+Lasso_Reg <- function(data){
+  # sample = sample.int(n = nrow(data), size = floor(0.8*nrow(data)), replace = F)
+  # train = data[sample, ]
+  # test  = data[-sample, ]
+  testm <- as.matrix(test[,-1])
+  label <- data$label
+  tlabel <- test$label
+  x <- model.matrix(label ~ .,data = data)[, -1]
+  glmmod <- glmnet(x, y=as.factor(label), alpha=1, family="multinomial")
+  pred <- predict(glmmod, newx = testm, s = 0.0051, "class")
+  tabl <- table(pred,tlabel)
+  accuracy = sum(diag(prop.table(tabl)))
+  lendata = nrow(data)
+  return(list("model" = glmmod, "accuracy" = accuracy, "pred" = pred))
+}
+```
+
+```{r load_model8}
+Model_8 <- rbind(scoring(dat_5000_1,Lasso_Reg),
+                 scoring(dat_5000_2,Lasso_Reg),
+                 scoring(dat_5000_3,Lasso_Reg),
+                 scoring(dat_10000_1,Lasso_Reg),
+                 scoring(dat_10000_2,Lasso_Reg),
+                 scoring(dat_10000_3,Lasso_Reg),
+                 scoring(dat_20000_1,Lasso_Reg),
+                 scoring(dat_20000_2,Lasso_Reg),
+                 scoring(dat_20000_3,Lasso_Reg))
+datatable(Model_8)
+```
+
+### Model 8
+The ridge model is similar to lasso and also one of the generalizaed linear model. We only need to replace L1 penalty with L2 penalty.
+$$\lambda \sum_{j=1}^n (\theta_j)^2$$
+
+The reasons for why we are using ridge regression are:
+1. The algorithm is easy to understand and interpret
+2. Don't have high computation cost
+3. Help avoid overfitting
+
+For the disadvantage of this model:
+1. The model is a weak classifer and don't have high accuracy
+
+For the important parameters $\lambda$: the penalty coefficient. We used gridsearch method to find the optimal value. The result of Ridge is almost the same as Logistic regression, which make sense since the algorithm is similar.
+
+```{r code_model7_development, eval = TRUE}
+Ridge_Reg <- function(data){
+  # sample = sample.int(n = nrow(data), size = floor(0.8*nrow(data)), replace = F)
+  # train = data[sample, ]
+  # test  = data[-sample, ]
+  testm <- as.matrix(test[,-1])
+  label <- data$label
+  tlabel <- test$label
+  x <- model.matrix(label ~ .,data = data)[, -1]
+  glmmod <- glmnet(x, y=as.factor(label), alpha=0, family="multinomial")
+  pred <- predict(glmmod, newx = testm, s = 0.01934, "class")
+  tabl <- table(pred,tlabel)
+  accuracy = sum(diag(prop.table(tabl)))
+  lendata = nrow(data)
+  return(list("model" = glmmod, "accuracy" = accuracy, "pred" = pred))
+}
+```
+
+```{r load_model7}
+Model_7 <- rbind(scoring(dat_5000_1,Ridge_Reg),
+                 scoring(dat_5000_2,Ridge_Reg),
+                 scoring(dat_5000_3,Ridge_Reg),
+                 scoring(dat_10000_1,Ridge_Reg),
+                 scoring(dat_10000_2,Ridge_Reg),
+                 scoring(dat_10000_3,Ridge_Reg),
+                 scoring(dat_20000_1,Ridge_Reg),
+                 scoring(dat_20000_2,Ridge_Reg),
+                 scoring(dat_20000_3,Ridge_Reg))
+datatable(Model_7)
+```
+
+### Model 9
+Naive Bayes is a machine learning algorithm based on Bayesian method. There are two assumptions for this method.  
+(1) Independent between features (for simplifying the computation):
+$$P(x_i|y, x_1, ..., x_{i-1}, x_{i+1}, ..., x_n) = P(x_i|y)$$
+(2) features are equally weighted.
+$$P(y|x_1, ..., x_n) = \frac{P(y)P(x_1, ..., x_n|y)}{P(x_1, ...., x_n)}$$
+$$P(y|x_1, ..., x_n) = \frac{P(y)\prod_{i=1}^n P(x_i|y)}{P(x_1, ..., x_n)} \propto P(y)\prod_{i=1}^n P(x_i|y) $$
+Thus, 
+$$\hat{y} = argmax_yP(y) \prod_{i=1}^n P(x_i|y) $$
+Based on the above formula, we could use maximum likelihood method to estimate parameters. 
+The reasons for why we are using Naive Bayes are:
+
+1. the output is probability  
+2. the model is easy to understand  
+3. Don't have too much parameters  
+4. Naive Bayes classifiers can be extremely fast compared to more sophisticated methods
+
+For the disadvantage of this model:
+1. the model has two strong assumptions  
+
+Naive Bayes has strong assumptions but doesn't have too much parameters. We simply use default parameters. Based on the result, this model don't have good results. However, the model performance increases as the size of training data increasing. If we use more data, probably this model will return a good result. Currently, we don't think this model works. The reason might be the data doesn't follow the assumptions.
+
+```{r code_model9_development, eval = TRUE}
+Naive_Bayes <- function(data){
+  # sample = sample.int(n = nrow(data), size = floor(0.8*nrow(data)), replace = F)
+  # train = data[sample, ]
+  # test  = data[-sample, ]
+  nb <- naiveBayes(as.factor(data$label)~., data=data)
+  pred <- predict(nb, test[,2:50])
+  accuracy = sum(test$label==pred)/nrow(test)
+  return(list("Model" = nb, "accuracy" = accuracy, "pred" = pred))
+}
+```
+
+```{r load_model9}
+Model_9 <- rbind(scoring(dat_5000_1,Naive_Bayes),
+                 scoring(dat_5000_2,Naive_Bayes),
+                 scoring(dat_5000_3,Naive_Bayes),
+                 scoring(dat_10000_1,Naive_Bayes),
+                 scoring(dat_10000_2,Naive_Bayes),
+                 scoring(dat_10000_3,Naive_Bayes),
+                 scoring(dat_20000_1,Naive_Bayes),
+                 scoring(dat_20000_2,Naive_Bayes),
+                 scoring(dat_20000_3,Naive_Bayes))
+datatable(Model_9)
+```
+
+### Model 10
+Ensemble learning is very useful for improving the accuracy rate, the idea behind ensemble learning for classification is to combine all models' results and get new result. There are three main methods in ensemble learning, first is bagging, second is boosting and the last is stacking. We used bagging method. Weights are the very important parameter for this method. In this ensemble model, we simply use equal weights. The reason why we are using ensemble model is that it will help improve accuracy. The disadvantage is that the model become more complex, harder to explain and also harder to deploy. 
+
+We selected some models to fit an ensemble model (Logistic, Lasso, Ridge, RandomForest, SVM and KNN). The result is pretty good. The only bad thing is the running time equal to the sum of the former six models.
+
+```{r code_model10_development, eval = TRUE}
+Maj_Vote <- function(data){
+  KNN_result = K_Nearest_Neighbors(data)
+  SVM_result = Support_Vector_Machines(data)
+  randomForest_result = my_randomForest(data)
+  Log_result= Log_Reg(data)
+  Rid_result= Ridge_Reg(data)
+  Las_result= Lasso_Reg(data)
+  model_list <- list(Las_result, Rid_result, Log_result, randomForest_result, KNN_result, SVM_result)
+  pred_list <- lapply(model_list, function(x) x$pred)
+  p <- as.data.frame(pred_list)
+  p$maj <- apply(p,1,function(x) names(which.max(table(x))))
+  #View(p)
+  accuracy = mean(p$maj == test$label)
+  lendata = nrow(data)
+  return(list("model" = NA, "accuracy" = accuracy, "pred" = p$maj))
+}
+```
+
+```{r load_model10}
+Model_10 <- rbind(scoring(dat_5000_1,Maj_Vote),
+                  scoring(dat_5000_2,Maj_Vote),
+                  scoring(dat_5000_3,Maj_Vote),
+                  scoring(dat_10000_1,Maj_Vote),
+                  scoring(dat_10000_2,Maj_Vote),
+                  scoring(dat_10000_3,Maj_Vote),
+                  scoring(dat_20000_1,Maj_Vote),
+                  scoring(dat_20000_2,Maj_Vote),
+                  scoring(dat_20000_3,Maj_Vote))
+datatable(Model_10)
+```
+
+## Scoreboard
+```{r scoreboard}
+sb_names <- c("A","B","C","score")
+sb <- rbind(Model_1[,lapply(X=.SD,FUN=mean),.SDcols=sb_names,by="Sample size"],
+            Model_2[,lapply(X=.SD,FUN=mean),.SDcols=sb_names,by="Sample size"],
+            Model_3[,lapply(X=.SD,FUN=mean),.SDcols=sb_names,by="Sample size"],
+            Model_4[,lapply(X=.SD,FUN=mean),.SDcols=sb_names,by="Sample size"],
+            Model_5[,lapply(X=.SD,FUN=mean),.SDcols=sb_names,by="Sample size"],
+            Model_6[,lapply(X=.SD,FUN=mean),.SDcols=sb_names,by="Sample size"],
+            Model_7[,lapply(X=.SD,FUN=mean),.SDcols=sb_names,by="Sample size"],
+            Model_8[,lapply(X=.SD,FUN=mean),.SDcols=sb_names,by="Sample size"],
+            Model_9[,lapply(X=.SD,FUN=mean),.SDcols=sb_names,by="Sample size"],
+            Model_10[,lapply(X=.SD,FUN=mean),.SDcols=sb_names,by="Sample size"])
+sb <- round(sb,4)
+sb_model <- c(rep("KNN",3),rep("Classification_tree",3),rep("SVM",3),
+              rep("RandomForest",3),rep("Neural_network",3),rep("logistic",3),
+              rep("Ridge",3),rep("Lasso",3),rep("Naive_bayes",3),rep("Ensemble",3))
+datatable(cbind(sb_model,sb))
+
+```
+
+## Discussion
+In the scoreboard, we got results from 10 models using 9 iterations. The best model we got is random forest with 5000 rows dataset. However, for single decision tree, the scores are bad. Logistic regression, ridge and lasso models' scores are almost the same since the algorithms are similar. SVM also has good performance but the running time is long. If the weight of running time in scoring function decreases and the weight of accuracy in scoring function increases. SVM will get better points. For KNN, the accuracy is good and running time is not bad. For Neural Network, there are two problems. The first is the running time is long. The second is that the model is a single layer neural network which is not enough to get a good model. Based on the result, the neural network results are similar to logistic regression but cost more time to run. For Naive Bayes, this model doesn't work well. The possible reason is the data doesn't satisfy model's assumptions.  
+
+Since the sample size we choosed is large, so if the weight of sample size increases, all models' results will decrease. For the running time, SVM and Neural network have very long running time. For other models, the running time is OK. If increase both running time and sample size weight, the points will increase. If we have more computation resources, we can train more models and build more complex models like multi-layer neural network.
+
+Throughout this project, we learned a lot. First thing is machine learning algorithms including the theory, the meaning of parameters, how to adjust parameters and how to combine models together. Second is the whole data science process from loading data, building models to evaluate models. The third thing is group work, we organized the project together and work togther in the coding part. 
+
+## References
+1. Pedregosa F, Gramfort A, Michel V, et al. Scikit-learn: Machine Learning in Python[J]. Journal of Machine Learning Research, 2011, 12(10):2825-2830.
+2. Ziegel E R, The Elements of Statistical Learning[M], New York, Springer, 2009, 139-248
+3. Sklearn community, Sklearn, http://scikit-learn.org/stable/#, 2007-2018
+4. https://blog.statsbot.co/ensemble-learning-d1dcd548e936
+
+
+
+
